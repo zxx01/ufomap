@@ -67,6 +67,15 @@ Server::Server(ros::NodeHandle &nh, ros::NodeHandle &nh_priv)
 		map_.emplace<ufo::map::OccupancyMap>(resolution, depth_levels, false);
 	}
 
+	// Enable change detection
+	std::visit(
+	    [this](auto &map) {
+		    if constexpr (!std::is_same_v<std::decay_t<decltype(map)>, std::monostate>) {
+			    map.enableChangeDetection(true);
+		    }
+	    },
+	    map_);
+
 	// Enable min/max change detection
 	std::visit(
 	    [this](auto &map) {
@@ -114,6 +123,21 @@ void Server::cloudCallback(sensor_msgs::PointCloud2::ConstPtr const &msg)
 			    ufo::map::PointCloudColor cloud;
 			    ufomap_ros::rosToUfo(*msg, cloud);
 			    cloud.transform(transform, true);
+
+			    // If the frame_id is the same as the msg frame_id, we need to look up the
+			    // transform to the robot frame
+			    if (frame_id_ == msg->header.frame_id) {
+				    try {
+					    transform = ufomap_ros::rosToUfo(
+					        tf_buffer_
+					            .lookupTransform(frame_id_, robot_frame_id_, msg->header.stamp,
+					                             transform_timeout_)
+					            .transform);
+				    } catch (tf2::TransformException &ex) {
+					    ROS_WARN_THROTTLE(1, "%s", ex.what());
+					    return;
+				    }
+			    }
 
 			    map.insertPointCloudDiscrete(transform.translation(), cloud, max_range_,
 			                                 insert_depth_, simple_ray_casting_,
@@ -254,6 +278,19 @@ void Server::publishInfo()
 			       accumulated_whole_time_, accumulated_whole_time_ / num_wholes_,
 			       max_whole_time_);
 		}
+
+		// std::cerr << "change detection: "
+		//           << std::visit(
+		//                  [](auto &map) -> std::size_t {
+		// 	                 if constexpr (!std::is_same_v<std::decay_t<decltype(map)>,
+		// 	                                               std::monostate>) {
+		// 		                 return map.numChangedDetected();
+		// 	                 } else {
+		// 		                 return 0;
+		// 	                 }
+		//                  },
+		//                  map_)
+		//           << std::endl;
 	}
 
 	if (info_pub_ && 0 < info_pub_.getNumSubscribers()) {
